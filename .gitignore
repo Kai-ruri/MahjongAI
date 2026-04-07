@@ -1,0 +1,52 @@
+# Model weights (large binary files)
+*.pth
+
+# Datasets (large binary files)
+*.pkl
+
+# Tenhou game logs (raw data)
+logs/
+raw_logs/
+raw_logs_part3/
+
+# Benchmark results / temporary output
+benchmark_results_*.csv
+benchmark_summary_*.txt
+bench_*.txt
+test_result*.txt
+tenhou_run_log.txt
+result_random.txt
+training_history.csv
+training_curve.png
+
+# Intermediate results directories
+results/
+results_b2/
+results_fixed/
+results_fixed2/
+results_full/
+results_naki/
+results_test/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
