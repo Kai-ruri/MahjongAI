@@ -1028,10 +1028,10 @@ def calculate_true_ev(
 class MahjongStateV5:
     def __init__(self):
         self.hand = [0] * 34
-        self.fixed_mentsu = [] 
+        self.fixed_mentsu = []
         self.discards = {0: [], 1: [], 2: [], 3: []}
-        self.melds = {1: [], 2: [], 3: []} 
-        
+        self.melds = {1: [], 2: [], 3: []}
+
         self.bakaze = 0
         self.jikaze = 0
         self.dora_indicators = []
@@ -1039,12 +1039,23 @@ class MahjongStateV5:
         self.scores = {0: 25000, 1: 25000, 2: 25000, 3: 25000}
         self.honba = 0
         self.kyotaku = 0
-        self.forbidden_discards = [] # 🚫 今ターン、絶対に捨ててはいけない牌（食い替え防止）
+        self.forbidden_discards = [] # 今ターン、絶対に捨ててはいけない牌（食い替え防止）
+
+        # 赤ドラフラグ（tile_136: 16=赤五萬, 52=赤五筒, 88=赤五索）
+        self.aka_in_hand_5m = False
+        self.aka_in_hand_5p = False
+        self.aka_in_hand_5s = False
 
     def add_tile(self, who, tenhou_id):
         tile_type = tenhou_id // 4
         if who == 0:
             self.hand[tile_type] += 1
+            if tenhou_id == 16:
+                self.aka_in_hand_5m = True
+            elif tenhou_id == 52:
+                self.aka_in_hand_5p = True
+            elif tenhou_id == 88:
+                self.aka_in_hand_5s = True
     
     def execute_pon(self, who, tile_type):
         """ポンを厳密に処理し、自分・他家の脳内に晒し牌として記録する"""
@@ -1068,122 +1079,178 @@ class MahjongStateV5:
         self.discards[who].append(tile_type)
         if who == 0:
             self.hand[tile_type] -= 1
+            if tenhou_id == 16:
+                self.aka_in_hand_5m = False
+            elif tenhou_id == 52:
+                self.aka_in_hand_5p = False
+            elif tenhou_id == 88:
+                self.aka_in_hand_5s = False
+
+    @staticmethod
+    def _indicator_to_dora(indicator):
+        """ドラ表示牌 -> 実際のドラ牌 変換"""
+        if indicator < 27:   # 数牌（萬子・筒子・索子）
+            suit = indicator // 9
+            num  = indicator % 9
+            return suit * 9 + (num + 1) % 9
+        elif indicator < 31: # 風牌 (東南西北 = 27-30)
+            return 27 + (indicator - 27 + 1) % 4
+        else:                # 三元牌 (白發中 = 31-33)
+            return 31 + (indicator - 31 + 1) % 3
 
     def to_tensor(self, skip_logic=False):
-        # 🌟 全25チャンネル！
-        tensor = np.zeros((25, 34), dtype=np.float32)
+        """
+        33チャンネルテンソル（新設計）
+        CH00: 自分の手牌                (count/4.0)
+        CH01-03: 他家1-3の捨て牌        (+0.25/枚)
+        CH04-06: 他家1-3の副露          (+0.25/枚)
+        CH07-09: 他家1-3のリーチ宣言    (全1.0 or 全0.0)
+        CH10: 実際のドラマップ           (+0.25/枚, 最大4枚)
+        CH11: 場風                       (該当位置=1.0)
+        CH12: 自風                       (該当位置=1.0)
+        CH13-16: 各プレイヤーの点数      (score/100000.0)
+        CH17: 本場                       (honba/10.0)
+        CH18: 供托                       (kyotaku/10.0)
+        CH19: 自分の副露                 (+0.25/枚)
+        CH20: 自分の捨て牌              (+0.25/枚)  [旧設計から新規追加]
+        CH21: 巡目進行度                 (1.0=序盤 -> 0.0=終盤)
+        CH22: 残り牌枚数マップ           ((4-visible)/4.0)  [CH21バグ修正・専用化]
+        CH23: シャンテン数 per discard   (1.0-shanten*0.1)  [skip_logic=Trueなら0]
+        CH24: 有効牌数 per discard       (ukeire/40.0)      [skip_logic=Trueなら0]
+        CH25: EVダマ per discard         (ev_d/8000.0)      [skip_logic=Trueなら0]
+        CH26: EVリーチ per discard       (ev_r/8000.0)      [skip_logic=Trueなら0]
+        CH27: 自分のリーチ宣言           (全1.0 or 全0.0)  [新規追加]
+        CH28: 自分の着順                 (rank/3.0)         [新規追加]
+        CH29: トップとの点差             (gap/30000.0)      [新規追加]
+        CH30: 赤五萬保持フラグ           (全1.0 or 全0.0)  [新規追加]
+        CH31: 赤五筒保持フラグ           (全1.0 or 全0.0)  [新規追加]
+        CH32: 赤五索保持フラグ           (全1.0 or 全0.0)  [新規追加]
+        """
+        tensor = np.zeros((33, 34), dtype=np.float32)
 
-        # CH 0〜18 (手牌、他家の情報、点数状況など)
+        # CH0: 自分の手牌
         for i, count in enumerate(self.hand):
             tensor[0][i] = count / 4.0
 
+        # CH1-3: 他家捨て牌 / CH4-6: 他家副露 / CH7-9: 他家リーチ
         for who in [1, 2, 3]:
-            # 河はすでに34種表現で入っている前提
             for tile_type in self.discards[who]:
                 tensor[who][tile_type] += 0.25
-
             for m in self.melds[who]:
                 for tile_type in m:
                     tensor[who + 3][tile_type] += 0.25
-
             if self.riichi_declared[who]:
                 tensor[who + 6].fill(1.0)
 
-        # ドラ表示牌も34種表現で入っている前提
-        for dora_tile in self.dora_indicators:
-            tensor[10][dora_tile] += 1.0
+        # CH10: 実際のドラマップ（表示牌+1 の実ドラ）
+        for ind in self.dora_indicators:
+            actual = self._indicator_to_dora(ind)
+            tensor[10][actual] += 0.25  # 最大4枚 -> 1.0
 
+        # CH11: 場風 / CH12: 自風
         tensor[11][27 + self.bakaze] = 1.0
         tensor[12][27 + self.jikaze] = 1.0
 
-        for i in range(4): tensor[13 + i].fill(self.scores[i] / 100000.0)
+        # CH13-16: 点数 / CH17: 本場 / CH18: 供托
+        for i in range(4):
+            tensor[13 + i].fill(self.scores[i] / 100000.0)
         tensor[17].fill(self.honba / 10.0)
         tensor[18].fill(self.kyotaku / 10.0)
 
-        # 🌟 CH 19: 自分の鳴き（副露）
+        # CH19: 自分の副露
         for m in self.fixed_mentsu:
             for tile_type in m:
                 tensor[19][tile_type] += 0.25
 
-        # 🌟 CH 20: 巡目（山の残り枚数）
-        # 場に捨てられた牌の総数から巡目を概算。0枚(序盤)なら1.0、70枚(終盤)なら0.0に近づく
+        # CH20: 自分の捨て牌（新規追加）
+        for tile_type in self.discards[0]:
+            tensor[20][tile_type] += 0.25
+
+        # CH21: 巡目進行度
         total_discards = sum(len(d) for d in self.discards.values())
         turn_progress = max(0.0, 1.0 - (total_discards / 70.0))
-        tensor[20].fill(turn_progress)
+        tensor[21].fill(turn_progress)
 
-        # CH 21: 残り牌枚数マップ (B-3追加)
-        # 各牌が山にあと何枚残っているかを (4 - visible) / 4.0 で表現
-        # visible = 手牌 + 全員の捨て牌 + 全員の副露 + ドラ表示牌
+        # CH22: 残り牌枚数マップ（CH21バグを修正した専用チャンネル）
         visible = np.zeros(34, dtype=np.float32)
-        visible += tensor[0] * 4.0           # 自家手牌 (CH0は count/4.0 なので*4で戻す)
+        for tile_type, cnt in enumerate(self.hand):
+            visible[tile_type] += cnt
+        for who in range(4):
+            for tile_type in self.discards[who]:
+                visible[tile_type] += 1
+        for m in self.fixed_mentsu:
+            for tile_type in m:
+                visible[tile_type] += 1
         for who in [1, 2, 3]:
-            visible += tensor[who] / 0.25    # 他家捨て牌 (CH1-3は +=0.25 なので/0.25で枚数)
-            visible += tensor[who + 3] / 0.25  # 他家副露 (CH4-6)
-        visible += tensor[19] / 0.25         # 自家副露 (CH19)
-        visible += tensor[10]                # ドラ表示牌 (CH10は +=1.0)
+            for m in self.melds[who]:
+                for tile_type in m:
+                    visible[tile_type] += 1
+        for ind in self.dora_indicators:  # 表示牌は表向きなので見える
+            visible[ind] += 1
         visible = np.minimum(visible, 4.0)
-        tensor[21] = np.maximum(0.0, 4.0 - visible) / 4.0
+        tensor[22] = np.maximum(0.0, 4.0 - visible) / 4.0
 
-        # 🚀 【新規追加】鳴きデータ抽出時はここで計算を打ち切って高速化！
+        # CH27: 自分のリーチ宣言（新規追加）
+        if self.riichi_declared[0]:
+            tensor[27].fill(1.0)
+
+        # CH28: 着順 / CH29: トップとの点差（新規追加）
+        scores_list = [self.scores[i] for i in range(4)]
+        my_score = scores_list[0]
+        rank = sum(1 for s in scores_list if s > my_score)
+        tensor[28].fill(rank / 3.0)
+        max_score = max(scores_list)
+        score_gap = min(1.0, max(0.0, max_score - my_score) / 30000.0)
+        tensor[29].fill(score_gap)
+
+        # CH30-32: 赤ドラ保持フラグ（新規追加）
+        if self.aka_in_hand_5m:
+            tensor[30].fill(1.0)
+        if self.aka_in_hand_5p:
+            tensor[31].fill(1.0)
+        if self.aka_in_hand_5s:
+            tensor[32].fill(1.0)
+
+        # skip_logic=True なら CH23-26 はゼロのまま返す（鳴き判断用高速化）
         if skip_logic:
             return tensor
 
-        # --- CH 21〜24: 論理エンジン ---
+        # --- CH23-26: per-discard 論理エンジン ---
         for discard_idx in range(34):
             if self.hand[discard_idx] > 0:
                 temp_hand = self.hand.copy()
                 temp_hand[discard_idx] -= 1
-                
-                # CH 21: シャンテン数
+
+                # CH23: シャンテン数
                 shanten = calculate_shanten(temp_hand)
-                tensor[21][discard_idx] = max(0.0, 1.0 - (shanten * 0.1))
-                
-                # 🌟 CH 22: 有効牌（受け入れ）の追加！
+                tensor[23][discard_idx] = max(0.0, 1.0 - (shanten * 0.1))
+
+                # CH24: 有効牌（受け入れ）
                 ukeire_tiles, _ = get_ukeire(temp_hand)
                 if len(ukeire_tiles) > 0:
-                    # -----------------------------
-                    # visible_tiles をここで再定義
-                    # 定義:
-                    #   「自分の打牌候補 discard_idx を切ったあとの temp_hand を含む、
-                    #    場に見えている牌の34種枚数」
-                    # -----------------------------
                     visible_tiles = [0] * 34
-
-                    # 1. 自分の現在の手牌（temp_hand）を加算
                     for tile_type, count in enumerate(temp_hand):
                         visible_tiles[tile_type] += count
-
-                    # 2. 全員の河を加算
                     for who2 in range(4):
                         for tile_type in self.discards[who2]:
                             visible_tiles[tile_type] += 1
-                    # visible_tiles の最大値を4に制限
                     for i in range(34):
                         if visible_tiles[i] > 4:
                             visible_tiles[i] = 4
-
-                    # 3. ドラ表示牌を加算
-                    for dora_tile in self.dora_indicators:
-                        visible_tiles[dora_tile] += 1
-
-                    # 4. 自分の副露を加算
+                    for dora_ind in self.dora_indicators:
+                        visible_tiles[dora_ind] += 1
                     for m in self.fixed_mentsu:
                         for tile_type in m:
                             visible_tiles[tile_type] += 1
-
-                    # 5. 他家の副露を加算
                     for who2 in [1, 2, 3]:
                         for m in self.melds[who2]:
                             for tile_type in m:
                                 visible_tiles[tile_type] += 1
 
-                    # 実質的な受け入れ枚数を計算
                     ukeire_count = sum(max(0, 4 - visible_tiles[ut]) for ut in ukeire_tiles)
+                    tensor[24][discard_idx] = min(1.0, ukeire_count / 40.0)
 
-                    # 40枚を最大(1.0)として正規化
-                    tensor[22][discard_idx] = min(1.0, ukeire_count / 40.0)
-
-                    # CH 23, 24: EV
+                    # CH25-26: EV
                     ev_r, ev_d = calculate_true_ev(
                         temp_hand,
                         self.fixed_mentsu,
@@ -1197,9 +1264,9 @@ class MahjongStateV5:
                         kyotaku=self.kyotaku,
                         junme=int(total_discards / 4) + 1
                     )
-                    tensor[23][discard_idx] = min(1.0, ev_d / 8000.0)
-                    tensor[24][discard_idx] = min(1.0, ev_r / 8000.0)
-                    
+                    tensor[25][discard_idx] = min(1.0, ev_d / 8000.0)
+                    tensor[26][discard_idx] = min(1.0, ev_r / 8000.0)
+
         return tensor
 
     def can_naki(self, discarded_tile, who_discarded):
@@ -1231,22 +1298,12 @@ class MahjongStateV5:
         return np.concatenate((base_tensor, target_channel), axis=0)
 
     def to_tensor_for_naki_v2(self, discarded_tile):
-        """鳴き判断専用の28チャンネルテンソル（v2: 着順・点差チャンネル追加）"""
-        base_tensor = self.to_tensor(skip_logic=True)  # 25ch (CH22-24はゼロ埋め)
+        """鳴き判断専用の34チャンネルテンソル（33ch基底 + 1ch捨て牌位置）"""
+        # 33ch基底テンソル（CH28: 着順, CH29: 点差 はすでに含まれている）
+        base_tensor = self.to_tensor(skip_logic=True)  # shape: (33, 34)
 
-        # CH25: 捨て牌の位置
+        # CH33: 捨て牌の位置
         target_channel = np.zeros((1, 34), dtype=np.float32)
         target_channel[0][discarded_tile] = 1.0
 
-        # CH26: 自分の着順 (0=1位→0.0, 3=4位→1.0)
-        scores = [self.scores[i] for i in range(4)]
-        my_score = scores[0]
-        rank = sum(1 for s in scores if s > my_score)
-        rank_channel = np.full((1, 34), rank / 3.0, dtype=np.float32)
-
-        # CH27: トップとの点差 (0=同点→0.0, 30000点差以上→1.0)
-        max_score = max(scores)
-        score_gap = min(1.0, max(0.0, max_score - my_score) / 30000.0)
-        gap_channel = np.full((1, 34), score_gap, dtype=np.float32)
-
-        return np.concatenate((base_tensor, target_channel, rank_channel, gap_channel), axis=0)
+        return np.concatenate((base_tensor, target_channel), axis=0)  # shape: (34, 34)

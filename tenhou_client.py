@@ -37,7 +37,7 @@ from selfplay_minimal import should_declare_riichi, GlobalRoundState, get_player
 TENHOU_WS_URL = "wss://b-wk.mjv.jp"
 REGIDQ_URL    = "https://b.mjv.jp/regid"
 
-DISCARD_MODEL_PATH = "discard_b1_best.pth"
+DISCARD_MODEL_PATH = "discard_33ch_best.pth"
 NAKI_MODEL_PATH    = "mahjong_naki_model_master.pth"
 
 # ============================================================
@@ -168,10 +168,11 @@ class TenhouBot:
         self.game_type  = game_type
         self.verbose    = verbose
 
-        self.ws      = None
-        self.gs      = TenhouGameState()
-        self.running = False
-        self._msg_q  = queue.Queue()
+        self.ws             = None
+        self.gs             = TenhouGameState()
+        self.running        = False
+        self.game_completed = False  # 対局完了フラグ (最終結果受信時にTrue)
+        self._msg_q         = queue.Queue()
 
         self._pending_discard_tile136 = None
         self._pending_discard_from    = None
@@ -272,7 +273,7 @@ class TenhouBot:
     def _send(self, obj):
         """dict → JSON、文字列はそのまま送信"""
         raw = json.dumps(obj, ensure_ascii=False) if isinstance(obj, dict) else str(obj)
-        print(f"  → {raw}", flush=True)
+        print(f"  ->{raw}", flush=True)
         try:
             self.ws.send(raw)
         except Exception as e:
@@ -295,7 +296,7 @@ class TenhouBot:
         while time.time() < deadline:
             try:
                 raw = self._msg_q.get(timeout=1.0)
-                print(f"  ← {raw[:150]}", flush=True)
+                print(f"  <-{raw[:150]}", flush=True)
                 result.append(raw)
                 if keyword in raw:
                     return result
@@ -315,7 +316,7 @@ class TenhouBot:
         while time.time() < deadline:
             try:
                 raw = self._msg_q.get(timeout=1.0)
-                print(f"  ← {raw[:150]}", flush=True)
+                print(f"  <-{raw[:150]}", flush=True)
                 m = json.loads(raw)
                 tag = m.get("tag", "")
                 if tag == "ERR":
@@ -366,7 +367,7 @@ class TenhouBot:
         self._send({"tag": "JOIN", "t": f"0,{self.game_type}"})
         while self.running:
             for raw in self._recv_messages(timeout=5.0):
-                print(f"  ← {raw[:150]}", flush=True)
+                print(f"  <-{raw[:150]}", flush=True)
                 try:
                     m = json.loads(raw)
                 except json.JSONDecodeError:
@@ -416,11 +417,30 @@ class TenhouBot:
                     self.ws.close()
             except Exception:
                 pass
+        return self.game_completed
 
     def _game_loop(self):
+        MAX_GAME_SECONDS = 5400   # 90分でゲームタイムアウト
+        MAX_IDLE_SECONDS = 300    # 5分間メッセージ無受信でタイムアウト
+        game_start   = time.time()
+        last_msg_time = time.time()
+
         while self.running:
-            for raw in self._recv_messages(timeout=0.2):
-                print(f"  ← {raw[:150]}", flush=True)
+            now = time.time()
+            if now - game_start > MAX_GAME_SECONDS:
+                self.log("ゲームタイムアウト (90分)")
+                self.running = False
+                break
+            if now - last_msg_time > MAX_IDLE_SECONDS:
+                self.log("受信タイムアウト (5分無通信)")
+                self.running = False
+                break
+
+            msgs = self._recv_messages(timeout=0.2)
+            if msgs:
+                last_msg_time = time.time()
+            for raw in msgs:
+                print(f"  <- {raw[:150]}", flush=True)
                 self._dispatch(raw)
 
     # ----------------------------------------------------------
@@ -475,7 +495,7 @@ class TenhouBot:
                     "RYUUKYOKU": self._on_ryuukyoku,
                     "GO":        self._on_go,
                     "ERR":       lambda m: self.log(f"ERR受信: {m}"),
-                    "PROF":      lambda m: self._stop("PROF受信"),
+                    "PROF":      lambda m: self._on_prof(m),
                 }
                 h = handlers.get(letter)
                 if h:
@@ -628,12 +648,15 @@ class TenhouBot:
 
     def _on_agari(self, msg):
         who = int(msg.get("who", 0))
-        sc_str = str(msg.get("sc", ""))
-        if sc_str:
-            parts = sc_str.split(",")
-            for i in range(4):
-                if i * 2 < len(parts):
-                    self.gs.scores[i] = int(parts[i * 2]) * 100
+        try:
+            sc_str = str(msg.get("sc", ""))
+            if sc_str:
+                parts = sc_str.split(",")
+                for i in range(4):
+                    if i * 2 < len(parts):
+                        self.gs.scores[i] = int(parts[i * 2]) * 100
+        except Exception as e:
+            self.log(f"sc parse error (ignored): {e}")
         self.log(f"和了: 席{who}  スコア: {self.gs.scores}")
 
         if "owari" in msg:
@@ -646,12 +669,15 @@ class TenhouBot:
         self._send({"tag": "NEXTREADY"})
 
     def _on_ryuukyoku(self, msg):
-        sc_str = str(msg.get("sc", ""))
-        if sc_str:
-            parts = sc_str.split(",")
-            for i in range(4):
-                if i * 2 < len(parts):
-                    self.gs.scores[i] = int(parts[i * 2]) * 100
+        try:
+            sc_str = str(msg.get("sc", ""))
+            if sc_str:
+                parts = sc_str.split(",")
+                for i in range(4):
+                    if i * 2 < len(parts):
+                        self.gs.scores[i] = int(parts[i * 2]) * 100
+        except Exception as e:
+            self.log(f"sc parse error (ignored): {e}")
 
         if "owari" in msg:
             self.log("流局→対局終了")
@@ -676,19 +702,28 @@ class TenhouBot:
     # 打牌
     # ----------------------------------------------------------
     def _do_discard(self):
-        gs    = self.gs
-        state = gs.to_mahjong_state_v5()
+        gs = self.gs
+        try:
+            state = gs.to_mahjong_state_v5()
 
-        best_tile_t34, _, debug_rows = hybrid_inference.hybrid_ai_decision_v6_rerank_debug(
-            state, self.ai_model, top_k=5
-        )
+            best_tile_t34, _, debug_rows = hybrid_inference.hybrid_ai_decision_v6_rerank_debug(
+                state, self.ai_model, top_k=5
+            )
 
-        gr_state      = gs.build_global_round_state()
-        declare_riichi = should_declare_riichi(
-            gr_state, gs.my_seat, best_tile_t34, debug_rows
-        )
+            gr_state       = gs.build_global_round_state()
+            declare_riichi = should_declare_riichi(
+                gr_state, gs.my_seat, best_tile_t34, debug_rows
+            )
 
-        discard_136 = self._pick_tile_136(best_tile_t34)
+            discard_136 = self._pick_tile_136(best_tile_t34)
+        except Exception as e:
+            self.log(f"discard AI error ({e}), fallback to first tile in hand")
+            import traceback; traceback.print_exc()
+            if not gs.my_hand_136:
+                return
+            discard_136   = gs.my_hand_136[0]
+            best_tile_t34 = discard_136 // 4
+            declare_riichi = False
 
         if declare_riichi and not gs.riichi_declared[gs.my_seat]:
             self.log(f"リーチ宣言 捨て牌: {tile_names[best_tile_t34]}")
@@ -859,7 +894,13 @@ class TenhouBot:
     # ----------------------------------------------------------
     # 対局結果表示
     # ----------------------------------------------------------
+    def _on_prof(self, msg):
+        """PROF受信 = 対局終了。game_completedをTrueにしてから停止。"""
+        self.game_completed = True
+        self._stop("PROF受信")
+
     def _show_final_result(self, msg):
+        self.game_completed = True  # owari付きAGARI/RYUUKYOKU経由でも念のためセット
         owari = str(msg.get("owari", ""))
         self.log(f"最終結果: {owari}")
         if owari:
@@ -888,11 +929,11 @@ def load_models(device="cpu"):
     try:
         sd_naki = torch.load(NAKI_MODEL_PATH, map_location=device)
         naki_blocks = max(int(k.split(".")[1]) for k in sd_naki if k.startswith("res_blocks.")) + 1
-        # V2(28ch) / V1(26ch) を自動判定
+        # V2(28ch旧 or 34ch新) / V1(26ch) を自動判定
         in_ch = sd_naki["conv_in.weight"].shape[1]
-        if in_ch == 28:
+        if in_ch >= 28:
             naki_model = MahjongResNet_Naki_V2(num_blocks=naki_blocks)
-            print(f"  鳴きモデル: {NAKI_MODEL_PATH} (V2 28ch)")
+            print(f"  鳴きモデル: {NAKI_MODEL_PATH} (V2 {in_ch}ch)")
         else:
             naki_model = MahjongResNet_Naki(num_blocks=naki_blocks)
             print(f"  鳴きモデル: {NAKI_MODEL_PATH} (V1 26ch)")

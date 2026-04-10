@@ -55,8 +55,8 @@ def extract_dataset_from_xml(xml_string, log_id="unknown"):
                 # V5状態に変換
                 local_state = build_local_state(tracker, target_seat)
                 
-                # まずは軽量版（ロジックなし）でテンソル化
-                tensor_input = local_state.to_tensor(skip_logic=True)
+                # skip_logic=False: CH23-26(シャンテン/受け入れ/EV)も含む完全版テンソル
+                tensor_input = local_state.to_tensor(skip_logic=False)
                 
                 record = {
                     "meta_log_id": log_id,

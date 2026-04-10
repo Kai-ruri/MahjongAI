@@ -13,11 +13,20 @@ raw_logs_part3/
 benchmark_results_*.csv
 benchmark_summary_*.txt
 bench_*.txt
+benchmark_*.txt
 test_result*.txt
 tenhou_run_log.txt
 result_random.txt
 training_history.csv
 training_curve.png
+
+# Progress / log files
+*_progress.txt
+*_progress.json
+game_log_*.csv
+
+# Claude Code assistant memory (local only)
+.claude/
 
 # Intermediate results directories
 results/

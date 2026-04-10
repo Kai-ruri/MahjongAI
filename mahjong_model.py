@@ -27,8 +27,8 @@ class ResidualBlock(nn.Module):
 class MahjongResNet_UltimateV3(nn.Module):
     def __init__(self, num_blocks=5):
         super(MahjongResNet_UltimateV3, self).__init__()
-        # 💡 ここを 25チャンネル に変更！
-        self.conv_in = nn.Conv1d(in_channels=25, out_channels=256, kernel_size=3, padding=1)
+        # 33チャンネル入力（旧25ch -> 新33ch）
+        self.conv_in = nn.Conv1d(in_channels=33, out_channels=256, kernel_size=3, padding=1)
         self.bn_in = nn.BatchNorm1d(256)
         
         self.res_blocks = nn.Sequential(
@@ -73,10 +73,10 @@ class MahjongResNet_Naki(nn.Module):
 
 
 class MahjongResNet_Naki_V2(nn.Module):
-    """MahjongResNet_Naki の改良版 (28ch: 着順・点差チャンネル追加)"""
+    """MahjongResNet_Naki の改良版 (34ch: 33ch基底 + 1ch捨て牌位置)"""
     def __init__(self, num_blocks=3):
         super().__init__()
-        self.conv_in = nn.Conv1d(in_channels=28, out_channels=128, kernel_size=3, padding=1)
+        self.conv_in = nn.Conv1d(in_channels=34, out_channels=128, kernel_size=3, padding=1)
         self.bn_in = nn.BatchNorm1d(128)
         self.res_blocks = nn.Sequential(*[ResidualBlock(128) for _ in range(num_blocks)])
         self.fc_naki = nn.Linear(128 * 34, 2)

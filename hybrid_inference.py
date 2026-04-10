@@ -1298,14 +1298,16 @@ def calculate_future_potential_bonus_v2_fast(state, tile_idx, max_future_tiles=3
             continue
         is_useful = False
         if draw >= 27:
-            # 字牌: 対子になれば有効
-            if temp_h[draw] == 1:
-                is_useful = True  # 1枚あれば対子になれる
+            # 字牌: 役牌（場風・自風・三元牌）のみ対子ボーナスを評価
+            # 非役牌孤立字牌（南・西・北など）は有効牌としてカウントしない
+            _fp_yakuhai = {27 + state.bakaze, 27 + state.jikaze, 31, 32, 33}
+            if draw in _fp_yakuhai and temp_h[draw] == 1:
+                is_useful = True
         else:
             suit = draw // 9
             rank = draw % 9
-            # 隣接or同種があれば有効
-            for offset in [-2, -1, 0, 1, 2]:
+            # 隣接牌があれば有効（offset=0は除外: 孤立牌を自己ドローで有効判定しない）
+            for offset in [-2, -1, 1, 2]:
                 n = draw + offset
                 if 0 <= n < 34 and n // 9 == suit and temp_h[n] > 0:
                     is_useful = True
@@ -1329,8 +1331,8 @@ def hybrid_ai_decision_v6_rerank_debug(state, ai_model, top_k=5):
       2. 候補だけ EV + 守備 + シャンテン + 受け入れで再評価
       3. 最終決定する
     """
-    # skip_logic=True で高速テンソル生成 (EV/shanten チャンネルはゼロだがNNには不要)
-    tensor_data_np = state.to_tensor(skip_logic=True)
+    # skip_logic=False: CH23-26(シャンテン/受け入れ/EV)を含む完全版テンソル（33ch）
+    tensor_data_np = state.to_tensor(skip_logic=False)
     tensor = torch.tensor(tensor_data_np, dtype=torch.float32).unsqueeze(0)
 
     ai_model.eval()
@@ -1431,6 +1433,14 @@ def hybrid_ai_decision_v6_rerank_debug(state, ai_model, top_k=5):
         if best_shanten_tile >= 0:
             candidate_tiles.append(best_shanten_tile)
 
+    # 非役牌孤立字牌は必ず候補に含める
+    # NNが「切らない」と学習した場合でも、役のない孤立字牌は常に打牌候補として評価する
+    _yakuhai_set_cand = {27 + state.bakaze, 27 + state.jikaze, 31, 32, 33}
+    for t in legal_tiles:
+        if t not in candidate_tiles and t >= 27 and t not in _yakuhai_set_cand:
+            if state.hand[t] == 1:  # 孤立（対子でない）字牌のみ
+                candidate_tiles.append(t)
+
     # リーチ者の現物一覧
     safe_tiles = set()
     is_under_attack = False
@@ -1526,6 +1536,25 @@ def hybrid_ai_decision_v6_rerank_debug(state, ai_model, top_k=5):
             )
             future_bonus = future_bonus_raw * FUTURE_WEIGHT
 
+        # 非役牌孤立字牌ボーナス: NNバイアスを上回る強い補正
+        # 場風・自風・三元牌以外の孤立字牌（南・西・北など）はほぼ常に最優先で切るべき
+        # ただしドラ牌は例外：非役牌でもドラなら切らない
+        isolated_honor_bonus = 0.0
+        if i >= 27 and state.hand[i] == 1 and after_shanten > 0:
+            _yakuhai_set = {27 + state.bakaze, 27 + state.jikaze, 31, 32, 33}
+            _actual_doras = get_dora_tiles_from_indicators(getattr(state, 'dora_indicators', []))
+            if i not in _yakuhai_set and i not in _actual_doras:
+                isolated_honor_bonus = 0.40
+
+        # 5m/5p/5s の自牌価値ペナルティ（赤ドラ候補保護）
+        # 赤5m=tile4, 赤5p=tile13, 赤5s=tile22 を切る場合、手牌価値が高いため抑制
+        # ※ 黒5でも同様のペナルティが入るが平均的に有益（赤1枚混在の確率が高い）
+        aka_value_penalty = 0.0
+        if i in (4, 13, 22):  # 5m, 5p, 5s
+            # 安全牌として切る場合（低リスクな場面で切ろうとしている）に抑制
+            if risk_value <= 0.45:
+                aka_value_penalty = 0.12
+
         # route_bonus はそのままだと強すぎるので少し弱めて混ぜる
         raw_final_score = (
             nn_score * NN_WEIGHT
@@ -1538,7 +1567,9 @@ def hybrid_ai_decision_v6_rerank_debug(state, ai_model, top_k=5):
             + route_bonus * 0.35
             + future_bonus
             + tile_mode_adjustment
+            + isolated_honor_bonus
             - risk_penalty
+            - aka_value_penalty
         )
 
         final_score = max(raw_final_score, 0.0)
@@ -1998,8 +2029,9 @@ def hybrid_naki_decision_v5(state, discarded_tile, who_discarded, naki_model):
         return False, 0.0
 
     # モデルの入力チャンネル数でv1/v2を自動判定
+    # v1: 26ch、v2: 28ch(旧) or 34ch(新33ch基底+1)
     in_channels = getattr(naki_model.conv_in, 'in_channels', 26)
-    if in_channels == 28:
+    if in_channels >= 28:
         tensor_data_np = state.to_tensor_for_naki_v2(discarded_tile)
     else:
         tensor_data_np = state.to_tensor_for_naki(discarded_tile)
@@ -2069,7 +2101,8 @@ def decide_naki_action(state, ai_model, discard_tile, who_discarded):
     best_temp_h = None
 
     # --- ポン判定 ---
-    if state.hand[discard_tile] >= 2:
+    # 手牌に3枚ある（暗刻）場合はポンしない: 暗刻はそのまま持つ方が強い（暗槓は別途判定）
+    if state.hand[discard_tile] == 2:
         # ポン後の仮手牌でシャンテンを計算
         temp_state = _copy.copy(state)
         temp_h = state.hand.copy()
@@ -2150,18 +2183,19 @@ def decide_naki_action(state, ai_model, discard_tile, who_discarded):
             or _check_one_suit(post_discard_h, after_melds)                              # ④ ホンイツ/清一色方向（打牌後で判定）
         )
         if not allowed:
-            # ⑤ 有効牌が維持または増える場合は鳴く（減る場合のみスキップ）
-            before_eff = len(get_effective_draw_tiles_with_open_hand(state, state.hand))
-            after_eff = len(get_effective_draw_tiles_with_open_hand(post_discard_state, post_discard_h))
-            if after_eff < before_eff:
-                return {"best": {"action": "skip"}}
+            # 役の見通しが①〜④のいずれもない場合は常にスキップ
+            # （有効牌フォールバックは役なし端牌ポンを許してしまうため削除）
+            return {"best": {"action": "skip"}}
 
     # 【Change 1】副露後打牌の安全性チェック（リーチ者がいる場合のみ）
-    if any(getattr(state, 'riichi_declared', {}).values()):
-        if best_discard_after >= 0:
-            risk = calculate_simple_discard_risk(state, best_discard_after)
-            if risk > 1.5:
-                return {"best": {"action": "skip"}}
+    # 役牌ポンは役確定のため、リーチ対策でも基本的にスキップしない
+    is_yakuhai_pon_c1 = _check_yakuhai_pon(state, discard_tile, naki_type)
+    if not is_yakuhai_pon_c1:
+        if any(state.riichi_declared.get(p, False) for p in [1, 2, 3]):
+            if best_discard_after >= 0:
+                risk = calculate_simple_discard_risk(state, best_discard_after)
+                if risk > 1.5:
+                    return {"best": {"action": "skip"}}
 
     # 【Change 3】点数フィルタ: 副露後テンパイで最大ロン点数が低すぎなら見送り
     # 役牌ポンは対象外（役確定のため点数が低くても鳴く価値あり）
