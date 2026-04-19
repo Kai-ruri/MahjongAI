@@ -223,18 +223,59 @@ class AIAgentNew:
         if self.riichi_model is None:
             return should_declare_riichi(gs, pid, discard_tile, debug_rows)
 
-        # リーチモデル: 33ch base + CH33 (1-hot for discard_tile) → (34, 34)
+        import hybrid_inference
+
+        # Step 1: NN リーチ確率取得 (riichi_34ch_best.pth: 33ch base + CH33 → (34, 34))
         local_state = build_local_state_for_player(gs, pid)
         base_np = local_state.to_tensor(skip_logic=True)  # (33, 34)
         ch33 = np.zeros((1, 34), dtype=np.float32)
         ch33[0][discard_tile] = 1.0
         tensor_np = np.concatenate((base_np, ch33), axis=0)  # (34, 34)
         tensor = torch.tensor(tensor_np, dtype=torch.float32).unsqueeze(0)
-
         with torch.no_grad():
             out = self.riichi_model(tensor)
             prob_riichi = F.softmax(out, dim=1)[0][1].item()
-        return prob_riichi > 0.5
+
+        # Step 2: EV比較 (リーチEV vs ダマEV)
+        temp_hand = gs.hands[pid].copy()
+        temp_hand[discard_tile] -= 1
+        wait_tiles = hybrid_inference.get_waiting_tiles_with_open_hand(local_state, temp_hand)
+        visible = hybrid_inference.build_visible_tiles34(local_state)
+        ev_r, ev_d = 0.0, 0.0
+        if wait_tiles:
+            try:
+                from mahjong_engine import calculate_true_ev
+                jikaze = get_player_wind(gs.dealer_pid, pid)
+                ev_r, ev_d = calculate_true_ev(
+                    temp_hand, gs.fixed_mentsu[pid], wait_tiles, visible,
+                    gs.dora_indicators, gs.bakaze, jikaze,
+                    is_oya=(pid == gs.dealer_pid),
+                    honba=gs.honba, kyotaku=gs.riichi_sticks,
+                    junme=gs.junme,
+                )
+            except Exception:
+                pass
+
+        # NNが0.40超え、またはリーチEVがダマEVを1.1倍超えるならリーチ推奨
+        nn_wants_riichi = prob_riichi > 0.40
+        ev_wants_riichi = (ev_r > ev_d * 1.1) and ev_r > 0
+        should = nn_wants_riichi or ev_wants_riichi
+
+        # Step 3: 絶対条件フィルター (明らかに不利な局面ではリーチをブロック)
+        if not should:
+            return False
+        # 残り巡目が極めて少ない場合は危険
+        if gs.junme >= 17:
+            return False
+        # オーラスで1位かつダマでも点数が取れている場合はリスク回避
+        ctx = hybrid_inference.compute_game_situation(local_state)
+        if ctx.get('is_orasu') and ctx.get('rank') == 0 and ev_d >= 1000:
+            return False
+        # 1位で下位からの安手逆転リスクがあり、NNの確信が低い場合は慎重に
+        if (ctx.get('rank') == 0 and ctx.get('threatened_by_cheap')
+                and ctx.get('second_place_riichi') and prob_riichi < 0.60):
+            return False
+        return True
 
 
 # ==========================================
