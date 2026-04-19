@@ -60,15 +60,16 @@ logs/*.html.gz (Tenhou XML logs)
 | `selfplay_minimal.py` | Full 4-player game simulation using all models; decision pipeline: NN → reranking → action |
 
 ### Model Files (`.pth`)
-- `mahjong_ultimate_ai_v*.pth` — Discard decision models (main family)
+- `discard_33ch_best.pth` — **Current main discard model (33ch)**; output of `run_train_33ch.py`
+- `mahjong_ultimate_ai_v*.pth` — Discard decision models (legacy family)
 - `riichi_best.pth` — Riichi declaration
 - `call_best.pth` / `mahjong_naki_model_master.pth` — Meld/call decisions (PON/CHI)
-- `discard_best.pth` — Optimized discard
+- `discard_best.pth` — Optimized discard (legacy)
 - `ev_plus_best.pth` / `ev_minus_best.pth` — Expected value situational models
 - `oshibiki_best.pth` — Late-game aggressive push decisions
 
 ### Neural Network Architecture
-- **Input**: 25-channel (discard model) or 26-channel (naki model) 1D representation of game state
+- **Input**: 33-channel (discard model) or 34-channel (naki model: 33ch base + 1ch discarded tile) 1D representation of game state
 - **Backbone**: Conv1d → ResidualBlocks → Dense layers with BatchNorm
 - **Output**: 34-class softmax (tile types) for discard; binary for riichi/call decisions
 

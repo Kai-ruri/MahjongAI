@@ -22,28 +22,28 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class DiscardCNN(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64, 128), nn.ReLU(), nn.Linear(128, 34))
     def forward(self, t): return self.mlp(self.conv(t).view(t.size(0), -1))
 
 class CallCNN(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64 + 10, 64), nn.ReLU(), nn.Linear(64, 1))
     def forward(self, t, a): return self.mlp(torch.cat([self.conv(t).view(t.size(0), -1), a], dim=1))
 
 class RiichiCNN(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64 + 9, 64), nn.ReLU(), nn.Linear(64, 1))
     def forward(self, t, a): return self.mlp(torch.cat([self.conv(t).view(t.size(0), -1), a], dim=1))
 
 class OshibikiCNN(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64 + 23, 64), nn.ReLU(), nn.Linear(64, 1))
     def forward(self, t, a): return self.mlp(torch.cat([self.conv(t).view(t.size(0), -1), a], dim=1))
 
@@ -66,16 +66,16 @@ class IntegratedAIRouter:
             else:
                 print(f"  ⚠️ 見つかりません: {filename} (初期重みでフォールバック)")
                 
-        load_weights(self.discard_model, "discard_best.pth")
-        load_weights(self.call_model, "call_best.pth")
-        load_weights(self.riichi_model, "riichi_best.pth")
-        load_weights(self.oshibiki_model, "oshibiki_best.pth")
+        load_weights(self.discard_model, r"G:\マイドライブ\MahjongAI\discard_best.pth")
+        load_weights(self.call_model, r"G:\マイドライブ\MahjongAI\call_best.pth")
+        load_weights(self.riichi_model, r"G:\マイドライブ\MahjongAI\riichi_best.pth")
+        load_weights(self.oshibiki_model, r"G:\マイドライブ\MahjongAI\oshibiki_best.pth")
         
         self.discard_model.eval(); self.call_model.eval(); self.riichi_model.eval(); self.oshibiki_model.eval()
 
     def _extract_tensors(self, ctx):
         # 手牌の枚数を0ch目に反映（AIが真っ白な盤面を見ないように修正）
-        t = torch.zeros((1, 25, 34), dtype=torch.float32).to(device)
+        t = torch.zeros((1, 33, 34), dtype=torch.float32).to(device)
         for i, c in enumerate(ctx["hand"]):
             if c > 0: t[0, 0, i] = c / 4.0
             

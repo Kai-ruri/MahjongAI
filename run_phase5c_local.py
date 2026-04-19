@@ -33,7 +33,7 @@ from mahjong_model import MahjongResNet_Naki_V2
 TARGET_RECORDS = 10_000_000  # 実質無制限（全データを処理）
 LOGS_DIR = "./logs"
 DATASET_CACHE = "./dataset_naki_v2.pkl"
-OUTPUT_MODEL = "./mahjong_naki_model_master.pth"
+OUTPUT_MODEL = r"G:\マイドライブ\MahjongAI\mahjong_naki_model_master.pth"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {DEVICE}")
 

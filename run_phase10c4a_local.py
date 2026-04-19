@@ -13,7 +13,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class EV_CNN_Base3(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64 + 10 + 35, 128), nn.ReLU(), nn.Linear(128, 64), nn.ReLU(), nn.Linear(64, 1))
     def forward(self, t, m, a): return self.mlp(torch.cat([self.conv(t).view(t.size(0), -1), m, a], dim=1))
 
@@ -22,8 +22,8 @@ class ModelManager:
         print(f"🤖 本番CNNモデルをロード中... ({device})")
         self.ev_plus_net = EV_CNN_Base3().to(device)
         self.ev_minus_net = EV_CNN_Base3().to(device)
-        self._load(self.ev_plus_net, "ev_plus_best.pth")
-        self._load(self.ev_minus_net, "ev_minus_best.pth")
+        self._load(self.ev_plus_net, r"G:\マイドライブ\MahjongAI\ev_plus_best.pth")
+        self._load(self.ev_minus_net, r"G:\マイドライブ\MahjongAI\ev_minus_best.pth")
         self.ev_plus_net.eval(); self.ev_minus_net.eval()
 
     def _load(self, model, filename):
@@ -53,7 +53,7 @@ class RealCNNMahjongAgent:
         self.stats["kyoku_count"] += 1
 
     def _predict_ev(self, action_type):
-        t = torch.zeros((1, 25, 34), dtype=torch.float32).to(device)
+        t = torch.zeros((1, 33, 34), dtype=torch.float32).to(device)
         m = torch.zeros((1, 10), dtype=torch.float32).to(device)
         a_vec = torch.zeros((1, 35), dtype=torch.float32).to(device)
         

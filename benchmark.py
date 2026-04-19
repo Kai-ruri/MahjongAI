@@ -20,10 +20,12 @@ import sys
 import time
 from datetime import datetime
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 
 from mahjong_engine import MahjongStateV5, tile_names
-from mahjong_model import MahjongResNet_UltimateV3, MahjongResNet_Naki, MahjongResNet_Naki_V2
+from mahjong_model import MahjongResNet_UltimateV3, MahjongResNet_Naki, MahjongResNet_Naki_V2, MahjongResNet_34ch
 from selfplay_minimal import (
     GlobalRoundState,
     advance_round,
@@ -124,6 +126,115 @@ class SimpleRuleAgent:
         if gs.scores[pid] < 1000 or gs.junme >= 17:
             return False
         return is_tenpai_after_discard(gs, pid, discard_tile)
+
+
+class AIAgentNew:
+    """新モデル全統合エージェント (discard + riichi_34ch + oshibiki_34ch + naki_34ch)
+
+    情報制限:
+      - 自分の手牌: 完全に見える
+      - 全員の河: 見える
+      - ドラ表示牌: 見える
+      - 他家の手牌: 見えない (build_local_state_for_player で除外済み)
+    """
+    name = "AI_Full"
+
+    def __init__(self, discard_model, riichi_model=None, oshibiki_model=None,
+                 naki34_model=None, top_k=5):
+        self.discard_model = discard_model
+        self.riichi_model = riichi_model
+        self.oshibiki_model = oshibiki_model
+        self.naki34_model = naki34_model
+        self.ai_model = discard_model  # find_naki_action との互換性
+        self.top_k = top_k
+
+    def _should_push(self, gs, pid):
+        """押し引きモデルで押し(class=1) か引き(class=0) かを判定する。
+        相手リーチがいない場合は常に押し (True) を返す。"""
+        any_riichi = any(gs.riichi_declared[p] for p in range(4) if p != pid)
+        if not any_riichi or self.oshibiki_model is None:
+            return True
+
+        local_state = build_local_state_for_player(gs, pid)
+        base_np = local_state.to_tensor(skip_logic=True)  # (33, 34)
+        tensor = torch.tensor(base_np, dtype=torch.float32).unsqueeze(0)
+
+        with torch.no_grad():
+            out = self.oshibiki_model(tensor)
+            prob_push = F.softmax(out, dim=1)[0][1].item()
+        return prob_push > 0.5
+
+    def _safe_discard(self, gs, pid, extra_forbidden=None):
+        """引き判断時: 現物 → シャンテン最小の順で安全牌を選ぶ。"""
+        from hybrid_inference import calculate_shanten_unified
+        hand = gs.hands[pid]
+        forbidden = set(extra_forbidden or [])
+        candidates = [i for i in range(34) if hand[i] > 0 and i not in forbidden]
+        if not candidates:
+            candidates = [i for i in range(34) if hand[i] > 0]
+
+        # 相手リーチの現物タイルを収集 (相手の河に既出の牌)
+        genbutsu = set()
+        for p in range(4):
+            if p != pid and gs.riichi_declared[p]:
+                for t in gs.discards[p]:
+                    genbutsu.add(t)
+
+        safe_cands = [t for t in candidates if t in genbutsu]
+        pool = safe_cands if safe_cands else candidates
+
+        # シャンテンが最小になる牌を選ぶ
+        local_state = build_local_state_for_player(gs, pid)
+        best_tile, best_sh = pool[0], 999
+        for t in pool:
+            temp = hand.copy()
+            temp[t] -= 1
+            sh = calculate_shanten_unified(local_state, temp)
+            if sh < best_sh:
+                best_sh, best_tile = sh, t
+
+        debug_rows = [{"tile_idx": best_tile, "final_score": 0.0, "risk_value": 0.0,
+                       "after_shanten": best_sh, "ukeire_count": None,
+                       "shape_bonus": 0.0, "route_bonus": 0.0,
+                       "shape_reasons": ["oshibiki_fold"], "route_reasons": {}, "mode": "fold"}]
+        return best_tile, debug_rows
+
+    def choose_discard(self, gs, pid, extra_forbidden=None):
+        if not self._should_push(gs, pid):
+            return self._safe_discard(gs, pid, extra_forbidden)
+        return choose_discard_with_ai(
+            gs, pid, self.discard_model, top_k=self.top_k, extra_forbidden=extra_forbidden
+        )
+
+    def should_riichi(self, gs, pid, discard_tile, debug_rows):
+        # 基本条件チェック
+        if gs.riichi_declared[pid]:
+            return False
+        if len(gs.fixed_mentsu[pid]) > 0:
+            return False
+        if gs.scores[pid] < 1000:
+            return False
+
+        # テンパイ確認
+        from selfplay_minimal import is_tenpai_after_discard
+        if not is_tenpai_after_discard(gs, pid, discard_tile):
+            return False
+
+        if self.riichi_model is None:
+            return should_declare_riichi(gs, pid, discard_tile, debug_rows)
+
+        # リーチモデル: 33ch base + CH33 (1-hot for discard_tile) → (34, 34)
+        local_state = build_local_state_for_player(gs, pid)
+        base_np = local_state.to_tensor(skip_logic=True)  # (33, 34)
+        ch33 = np.zeros((1, 34), dtype=np.float32)
+        ch33[0][discard_tile] = 1.0
+        tensor_np = np.concatenate((base_np, ch33), axis=0)  # (34, 34)
+        tensor = torch.tensor(tensor_np, dtype=torch.float32).unsqueeze(0)
+
+        with torch.no_grad():
+            out = self.riichi_model(tensor)
+            prob_riichi = F.softmax(out, dim=1)[0][1].item()
+        return prob_riichi > 0.5
 
 
 # ==========================================
@@ -489,7 +600,7 @@ def format_summary_report(summary, agent_names, total_games, total_kyoku,
 # メイン
 # ==========================================
 
-def load_ai_model(path="mahjong_ultimate_ai_v5_master.pth"):
+def load_ai_model(path=r"G:\マイドライブ\MahjongAI\mahjong_ultimate_ai_v5_master.pth"):
     model = MahjongResNet_UltimateV3()
     if os.path.exists(path):
         model.load_state_dict(torch.load(path, map_location="cpu"))
@@ -500,12 +611,12 @@ def load_ai_model(path="mahjong_ultimate_ai_v5_master.pth"):
     return model
 
 
-def load_naki_model(path="mahjong_naki_model_master.pth"):
+def load_naki_model(path=r"G:\マイドライブ\MahjongAI\mahjong_naki_model_master.pth"):
     if not os.path.exists(path):
         print(f"  WARNING: {path} not found, naki uses heuristic only")
         return None
-    # V2(28ch) を先に試みて、失敗したら V1(26ch) にフォールバック
-    for model_cls, label in [(MahjongResNet_Naki_V2, "v2(28ch)"), (MahjongResNet_Naki, "v1(26ch)")]:
+    # V2(34ch) を先に試みて、失敗したら V1(26ch) にフォールバック
+    for model_cls, label in [(MahjongResNet_Naki_V2, "v2(34ch)"), (MahjongResNet_Naki, "v1(34ch)")]:
         try:
             model = model_cls()
             model.load_state_dict(torch.load(path, map_location="cpu"))
@@ -518,6 +629,22 @@ def load_naki_model(path="mahjong_naki_model_master.pth"):
     return None
 
 
+def load_34ch_model(path, in_channels, num_classes, label=""):
+    """MahjongResNet_34ch モデルをロードする汎用関数"""
+    if not os.path.exists(path):
+        print(f"  WARNING: {path} not found, {label} disabled")
+        return None
+    try:
+        model = MahjongResNet_34ch(num_classes=num_classes, in_channels=in_channels)
+        model.load_state_dict(torch.load(path, map_location="cpu"))
+        model.eval()
+        print(f"  Loaded {label}: {path} (in={in_channels}ch, out={num_classes}cls)")
+        return model
+    except Exception as e:
+        print(f"  WARNING: {path} load failed ({e}), {label} disabled")
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="MahjongAI Benchmark")
     parser.add_argument("--games", type=int, default=50, help="半荘数 (default: 50)")
@@ -526,9 +653,11 @@ def main():
     parser.add_argument("--vs-rule", action="store_true", help="AI 1人 + Rule 3人で対戦")
     parser.add_argument("--all-random", action="store_true", help="全員Randomで対戦（ベースライン測定）")
     parser.add_argument("--all-rule", action="store_true", help="全員Ruleで対戦（ルールベースライン）")
+    parser.add_argument("--new-models", action="store_true",
+                        help="新モデル全統合AI 1人 (discard_b3 + riichi_34ch + oshibiki_34ch + naki_34ch) + Rule 3人")
     parser.add_argument("--output", type=str, default=".", help="結果出力ディレクトリ (default: .)")
-    parser.add_argument("--ai-model", type=str, default="discard_b1_best.pth")
-    parser.add_argument("--naki-model", type=str, default="mahjong_naki_model_master.pth")
+    parser.add_argument("--ai-model", type=str, default=r"G:\マイドライブ\MahjongAI\discard_b1_best.pth")
+    parser.add_argument("--naki-model", type=str, default=r"G:\マイドライブ\MahjongAI\mahjong_naki_model_master.pth")
     parser.add_argument("--no-naki", action="store_true", help="ポン/チーを無効化")
     parser.add_argument("--seed", type=int, default=0, help="乱数シード起点 (default: 0)")
     args = parser.parse_args()
@@ -544,15 +673,36 @@ def main():
 
     # モデルロード
     print("\nLoading models...")
-    ai_model = load_ai_model(args.ai_model)
-    naki_model = None if args.no_naki else load_naki_model(args.naki_model)
+    naki_ai_model_override = None  # find_naki_action に渡す naki_ai_model
+
+    # --new-models 時は追加モデルをロード
+    if args.new_models:
+        discard_new = load_ai_model(r"G:\マイドライブ\MahjongAI\discard_33ch_best.pth")
+        riichi_model = load_34ch_model(r"G:\マイドライブ\MahjongAI\riichi_34ch_best.pth", in_channels=34, num_classes=2, label="riichi")
+        oshibiki_model = load_34ch_model(r"G:\マイドライブ\MahjongAI\oshibiki_34ch_best.pth", in_channels=33, num_classes=2, label="oshibiki")
+        naki34_model = load_34ch_model(r"G:\マイドライブ\MahjongAI\naki_34ch_best.pth", in_channels=34, num_classes=3, label="naki_34ch")
+        new_ai_agent = AIAgentNew(
+            discard_model=discard_new,
+            riichi_model=riichi_model,
+            oshibiki_model=oshibiki_model,
+            naki34_model=naki34_model,
+            top_k=5,
+        )
+        naki_ai_model_override = discard_new  # 鳴き評価には打牌モデルを使用
+        naki_model_override = naki34_model if not args.no_naki else None
+        ai_model = discard_new  # 互換性のため設定
+        naki_model = naki_model_override
+    else:
+        ai_model = load_ai_model(args.ai_model)
+        naki_model = None if args.no_naki else load_naki_model(args.naki_model)
+        new_ai_agent = None
+        naki_model_override = naki_model
 
     # エージェント構成
-    ai_agent = AIAgent(ai_model, top_k=5)
-    random_agent = RandomAgent()
-    rule_agent = SimpleRuleAgent()
-
-    if args.all_random:
+    if args.new_models:
+        agents = [new_ai_agent, SimpleRuleAgent(), SimpleRuleAgent(), SimpleRuleAgent()]
+        config_desc = "AI_Full (新モデル全統合) vs Rule x3"
+    elif args.all_random:
         agents = [RandomAgent(), RandomAgent(), RandomAgent(), RandomAgent()]
         config_desc = "AllRandom"
     elif args.all_rule:
@@ -568,11 +718,26 @@ def main():
         agents = [AIAgent(ai_model), AIAgent(ai_model), AIAgent(ai_model), AIAgent(ai_model)]
         config_desc = "AllAI"
 
+    # 使用する naki_model / naki_ai_model を決定
+    effective_naki_model = naki_model_override if args.new_models else naki_model
+    effective_naki_ai = naki_ai_model_override if args.new_models else (
+        None if args.no_naki else ai_model
+    )
+
     agent_names = [a.name for a in agents]
     print(f"\nConfig: {config_desc}")
     print(f"Agents: {agent_names}")
     print(f"Games: {args.games} x {args.max_kyoku} kyoku max")
     print(f"Naki: {'disabled' if args.no_naki else 'enabled'}")
+    print()
+
+    # 情報制限の確認メッセージ
+    print("[Info hiding] Each player can see:")
+    print("  [OK] Own hand (full)")
+    print("  [OK] All rivers (discards)")
+    print("  [OK] Dora indicators")
+    print("  [OK] Opponents' riichi / open melds (public)")
+    print("  [--] Opponents' hands (hidden - excluded in build_local_state_for_player)")
     print()
 
     # ベンチマーク実行
@@ -586,8 +751,8 @@ def main():
         seed = args.seed + game_id
         initial_dealer = game_id % 4  # ゲームごとに起家をローテーション
         all_stats, final_gs = run_hanchan(
-            agents, seed=seed, naki_model=naki_model,
-            naki_ai_model=None if args.no_naki else ai_model,
+            agents, seed=seed, naki_model=effective_naki_model,
+            naki_ai_model=effective_naki_ai,
             max_kyoku=args.max_kyoku,
             initial_dealer=initial_dealer,
         )

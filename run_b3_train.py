@@ -1,11 +1,46 @@
 """
-run_b3_train.py - B-3: 残り枚数マップ(CH21)を含む25chデータで再訓練
+[DEPRECATED] run_b3_train.py - B-3: 残り枚数マップ(CH21)を含む25chデータで再訓練（旧25ch時代の遺物）
 
-戦略:
-  1. discard_b1_best.pth (64.13%) から転移学習
-  2. CH21に残り枚数マップが入った dataset_b3_*.pkl で学習
-  3. 最良モデルを discard_b3_best.pth として保存
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! 警告: このスクリプトは現在のコードベースと互換性がなく、実行すると       !!
+!!        RuntimeError (shape mismatch) で失敗します。                       !!
+!!        使用しないでください。                                             !!
+!!                                                                            !!
+!! 代替手順:                                                                  !!
+!!   1. python build_supervised_dataset.py  # 33ch データセット生成          !!
+!!   2. python run_train_33ch.py            # 33ch モデル学習                !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+【非推奨となった理由】
+  このスクリプトは MahjongResNet_UltimateV3 を使用するが、同モデルの入力層は
+  旧25ch時代に in_channels=25 で設計されたのち、33ch へ移行した (commit 50d33da)。
+  一方、このスクリプトが読み込む dataset_b3_*.pkl は shape=(25, 34) の旧形式のままであり
+  モデルの期待する (33, 34) と一致しない。
+
+  CH22（残り牌枚数マップ）は現在 MahjongStateV5.to_tensor() 内で正確に計算されるため、
+  このスクリプトが行っていた CH21 への後付けエンリッチ処理も不要になった。
+  （関連: run_b3_enrich.py にも同様の廃止注記あり）
+
+【旧設計メモ（参考のみ）】
+  戦略:
+    1. discard_b1_best.pth (64.13%) から転移学習
+    2. CH21に残り枚数マップが入った dataset_b3_*.pkl で学習
+    3. 最良モデルを discard_b3_best.pth として保存
 """
+
+import sys
+print("="*70)
+print("[DEPRECATED] run_b3_train.py は旧25ch時代のスクリプトです。")
+print("  現在の MahjongResNet_UltimateV3 は 33ch 入力を期待しますが、")
+print("  このスクリプトが読み込む pkl ファイルは shape=(25,34) のため")
+print("  RuntimeError が発生します。")
+print("")
+print("  代わりに以下を実行してください:")
+print("    1. python build_supervised_dataset.py")
+print("    2. python run_train_33ch.py")
+print("="*70)
+sys.exit(1)
+
 
 import pickle
 import numpy as np

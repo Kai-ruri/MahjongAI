@@ -13,15 +13,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class ActionCNN(nn.Module):
     def __init__(self, aux_dim):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64 + aux_dim, 64), nn.ReLU(), nn.Linear(64, 1))
     def forward(self, t, a): 
         return self.mlp(torch.cat([self.conv(t).view(t.size(0), -1), a], dim=1))
 
 def load_call_net():
     model = ActionCNN(10).to(device)
-    if os.path.exists("call_best.pth"):
-        model.load_state_dict(torch.load("call_best.pth", map_location=device))
+    if os.path.exists(r"G:\マイドライブ\MahjongAI\call_best.pth"):
+        model.load_state_dict(torch.load(r"G:\マイドライブ\MahjongAI\call_best.pth", map_location=device))
         print("✅ 現行の call_best.pth をロードしました。")
     else:
         print("⚠️ call_best.pth が見つかりません。未学習モデルでテストします。")
@@ -33,7 +33,7 @@ def load_call_net():
 # =========================================
 def generate_structured_batch(batch_size):
     """ 単なる砂嵐ではなく、麻雀の手牌らしい構造(連続した1)を持つテンソルを生成 """
-    t = torch.zeros((batch_size, 25, 34), device=device)
+    t = torch.zeros((batch_size, 33, 34), device=device)
     a = torch.zeros((batch_size, 10), device=device)
     
     for i in range(batch_size):

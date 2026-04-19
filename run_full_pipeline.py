@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader, Dataset
 LOGS_DIR           = "logs"
 PROGRESS_FILE      = "dataset_intermediate_progress.json"  # 処理済みIDを追跡
 INTERMEDIATE_PKL   = "dataset_intermediate_phoenix.pkl"
-SAVE_MODEL_PATH    = "discard_b1_best.pth"
+SAVE_MODEL_PATH    = r"G:\マイドライブ\MahjongAI\discard_b1_best.pth"
 NUM_EPOCHS         = 30
 BATCH_SIZE         = 256
 LR                 = 3e-4
@@ -230,7 +230,7 @@ def step2_train():
     # 転移学習
     print("\n[2] 転移学習開始 (discard_b1_best.pth ベース)...")
     model = MahjongResNet_UltimateV3().to(device)
-    base = "discard_b1_best.pth"
+    base = r"G:\マイドライブ\MahjongAI\discard_b1_best.pth"
     if os.path.exists(base):
         model.load_state_dict(torch.load(base, map_location=device))
         print(f"  {base} から初期化")

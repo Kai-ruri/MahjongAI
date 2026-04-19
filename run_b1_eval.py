@@ -81,11 +81,11 @@ def main():
 
     # 評価するモデルファイル一覧
     model_files = [
-        "mahjong_ultimate_ai_v5_master.pth",
-        "mahjong_ultimate_ai_v5_supervised_full.pth",
-        "mahjong_ultimate_ai_v5_supervised_5000.pth",
-        "mahjong_ultimate_ai_v5_1game.pth",
-        "discard_b1_best.pth",  # B-1新規学習モデル
+        r"G:\マイドライブ\MahjongAI\mahjong_ultimate_ai_v5_master.pth",
+        r"G:\マイドライブ\MahjongAI\mahjong_ultimate_ai_v5_supervised_full.pth",
+        r"G:\マイドライブ\MahjongAI\mahjong_ultimate_ai_v5_supervised_5000.pth",
+        r"G:\マイドライブ\MahjongAI\mahjong_ultimate_ai_v5_1game.pth",
+        r"G:\マイドライブ\MahjongAI\discard_b1_best.pth",  # B-1新規学習モデル
     ]
 
     print("\n[2] 各モデルを評価中...")

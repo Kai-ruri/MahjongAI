@@ -92,7 +92,7 @@ class RiichiCNN_A(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv = nn.Sequential(
-            nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(),
+            nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(),
             nn.Conv1d(64, 64, 3, padding=1), nn.ReLU(),
             nn.AdaptiveAvgPool1d(1)
         )

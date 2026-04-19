@@ -1,16 +1,45 @@
 """
-run_b1_train.py - B-1: 打牌モデル精度向上トレーニング
+[DEPRECATED] run_b1_train.py - B-1: 打牌モデル精度向上トレーニング（旧25ch時代の遺物）
 
-目標: top-1 精度 60%超
-戦略:
-  1. supervised_full.pth (61.15%) をベースに転移学習で追加改善
-  2. label smoothing / cosine LR / gradient clip など最適化を強化
-  3. 最良モデルを discard_b1_best.pth として保存
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! 警告: このスクリプトは現在のコードベースと互換性がなく、実行すると       !!
+!!        RuntimeError (shape mismatch) で失敗します。                       !!
+!!        使用しないでください。                                             !!
+!!                                                                            !!
+!! 代替手順:                                                                  !!
+!!   1. python build_supervised_dataset.py  # 33ch データセット生成          !!
+!!   2. python run_train_33ch.py            # 33ch モデル学習                !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-注意: CH21/CH22 (シャンテン/受け入れ) のリアルタイム計算は処理コストが非常に高いため
-       ここでは既存の25チャンネル特徴のまま学習する。
-       (事前計算は run_b1_precompute.py を参照)
+【非推奨となった理由】
+  このスクリプトは MahjongResNet_UltimateV3 を使用するが、同モデルの入力層は
+  旧25ch時代に in_channels=25 で設計されたのち、33ch へ移行した (commit 50d33da)。
+  一方、このスクリプトが読み込む dataset_b1_downloaded.pkl 等は shape=(25, 34) の
+  旧形式のままであり、モデルの期待する (33, 34) と一致しない。
+
+【旧設計メモ（参考のみ）】
+  目標: top-1 精度 60%超
+  戦略:
+    1. supervised_full.pth (61.15%) をベースに転移学習で追加改善
+    2. label smoothing / cosine LR / gradient clip など最適化を強化
+    3. 最良モデルを discard_b1_best.pth として保存
+  注意: CH21/CH22 (シャンテン/受け入れ) のリアルタイム計算は処理コストが非常に高いため
+         ここでは既存の25チャンネル特徴のまま学習していた。
 """
+
+import sys
+print("="*70)
+print("[DEPRECATED] run_b1_train.py は旧25ch時代のスクリプトです。")
+print("  現在の MahjongResNet_UltimateV3 は 33ch 入力を期待しますが、")
+print("  このスクリプトが読み込む pkl ファイルは shape=(25,34) のため")
+print("  RuntimeError が発生します。")
+print("")
+print("  代わりに以下を実行してください:")
+print("    1. python build_supervised_dataset.py")
+print("    2. python run_train_33ch.py")
+print("="*70)
+sys.exit(1)
+
 
 import pickle
 import numpy as np
@@ -95,7 +124,7 @@ def evaluate_model(model, loader):
 # =========================================
 # 4. 学習ループ
 # =========================================
-def train(model, train_loader, val_loader, num_epochs=30, lr=3e-4, save_path="discard_b1_best.pth"):
+def train(model, train_loader, val_loader, num_epochs=30, lr=3e-4, save_path=r"G:\マイドライブ\MahjongAI\discard_b1_best.pth"):
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
     # label_smoothing: モデルが自信過剰になるのを防ぐ
@@ -195,7 +224,7 @@ def main():
 
     # ベースライン評価
     print("\n[2] ベースライン評価...")
-    for path in ["mahjong_ultimate_ai_v5_master.pth", "mahjong_ultimate_ai_v5_supervised_full.pth"]:
+    for path in [r"G:\マイドライブ\MahjongAI\mahjong_ultimate_ai_v5_master.pth", "mahjong_ultimate_ai_v5_supervised_full.pth"]:
         if not os.path.exists(path):
             continue
         m = MahjongResNet_UltimateV3().to(device)
@@ -210,7 +239,7 @@ def main():
     # 転移学習: supervised_full.pth から開始
     print("\n[3] 転移学習 (supervised_full.pth ベース)...")
     model = MahjongResNet_UltimateV3().to(device)
-    base_path = "mahjong_ultimate_ai_v5_supervised_full.pth"
+    base_path = r"G:\マイドライブ\MahjongAI\mahjong_ultimate_ai_v5_supervised_full.pth"
     if os.path.exists(base_path):
         model.load_state_dict(torch.load(base_path, map_location=device))
         print(f"  {base_path} から初期化")
@@ -220,12 +249,12 @@ def main():
         INIT_LR = 1e-3
 
     NUM_EPOCHS = 30
-    train(model, train_loader, val_loader, num_epochs=NUM_EPOCHS, lr=INIT_LR, save_path="discard_b1_best.pth")
+    train(model, train_loader, val_loader, num_epochs=NUM_EPOCHS, lr=INIT_LR, save_path=r"G:\マイドライブ\MahjongAI\discard_b1_best.pth")
 
     # 最終テスト評価
     print("\n[4] 最終テスト評価 (discard_b1_best.pth)...")
     final_model = MahjongResNet_UltimateV3().to(device)
-    final_model.load_state_dict(torch.load("discard_b1_best.pth", map_location=device))
+    final_model.load_state_dict(torch.load(r"G:\マイドライブ\MahjongAI\discard_b1_best.pth", map_location=device))
     final = evaluate_model(final_model, test_loader)
 
     print("\n" + "=" * 45)

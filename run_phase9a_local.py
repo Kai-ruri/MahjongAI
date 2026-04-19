@@ -58,7 +58,7 @@ def extract_ev_dataset():
                     my_rank = sum(1 for s in scores if s > my_score) + 1
                     
                     state_info = {
-                        "tensor": np.zeros((1, 25, 34), dtype=np.float32), # モック
+                        "tensor": np.zeros((1, 33, 34), dtype=np.float32), # モック
                         "turn": turn_counts[seat],
                         "is_oya": (seat == oya_seat),
                         "my_rank": my_rank,

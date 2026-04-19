@@ -37,8 +37,8 @@ from selfplay_minimal import should_declare_riichi, GlobalRoundState, get_player
 TENHOU_WS_URL = "wss://b-wk.mjv.jp"
 REGIDQ_URL    = "https://b.mjv.jp/regid"
 
-DISCARD_MODEL_PATH = "discard_33ch_best.pth"
-NAKI_MODEL_PATH    = "mahjong_naki_model_master.pth"
+DISCARD_MODEL_PATH = r"G:\マイドライブ\MahjongAI\discard_33ch_best.pth"
+NAKI_MODEL_PATH    = r"G:\マイドライブ\MahjongAI\mahjong_naki_model_master.pth"
 
 # ============================================================
 # タイル変換ユーティリティ

@@ -108,7 +108,7 @@ class ActionCNN(nn.Module):
     def __init__(self, aux_dim=10): # ⭐️ call_net用に10次元を指定
         super().__init__()
         self.conv = nn.Sequential(
-            nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(),
+            nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(),
             nn.Conv1d(64, 64, 3, padding=1), nn.ReLU(),
             nn.AdaptiveAvgPool1d(1)
         )
@@ -151,8 +151,8 @@ for epoch in range(30):
 
 # 最高性能の重みを復元し、上書き保存！
 model.load_state_dict(best_wts)
-torch.save(model.state_dict(), "call_best.pth")
-print("✅ 新しい 'call_best.pth' を保存しました！")
+torch.save(model.state_dict(), r"G:\マイドライブ\MahjongAI\call_best.pth")
+print("✅ 新しい r'G:\マイドライブ\MahjongAI\call_best.pth' を保存しました！")
 
 # =========================================
 # 📊 4. 再学習後の単体評価（ミニレポート）

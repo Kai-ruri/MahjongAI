@@ -2042,7 +2042,12 @@ def hybrid_naki_decision_v5(state, discarded_tile, who_discarded, naki_model):
         out_naki = naki_model(tensor)
         probs = F.softmax(out_naki, dim=1)[0].numpy()
 
-    naki_prob = probs[1] # 1番目のインデックスが「鳴く(1)」の確率
+    num_classes = out_naki.shape[1]
+    if num_classes >= 3:
+        # 3クラスモデル (0=skip, 1=pon, 2=chi): 「鳴く」確率 = 1 - skip確率
+        naki_prob = float(1.0 - probs[0])
+    else:
+        naki_prob = probs[1]  # 2クラスモデル: 0=skip, 1=naki
 
     # 💡 鳴き確率が40%を超えたら「鳴く！」と判断（閾値緩和: 50%→40%）
     if naki_prob > 0.40:

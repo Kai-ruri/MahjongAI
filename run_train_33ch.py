@@ -29,7 +29,7 @@ from mahjong_model import MahjongResNet_UltimateV3
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
-SAVE_PATH   = "discard_33ch_best.pth"
+SAVE_PATH   = r"G:\マイドライブ\MahjongAI\discard_33ch_best.pth"
 BATCH_SIZE  = 256
 NUM_EPOCHS  = 40
 INIT_LR     = 5e-4

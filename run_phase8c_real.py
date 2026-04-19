@@ -22,28 +22,28 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class DiscardCNN(nn.Module): # フェーズ3 (打牌)
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64, 128), nn.ReLU(), nn.Linear(128, 34))
     def forward(self, t): return self.mlp(self.conv(t).view(t.size(0), -1))
 
 class CallCNN(nn.Module): # フェーズ5 (鳴き)
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64 + 10, 64), nn.ReLU(), nn.Linear(64, 1)) # aux_dim=10想定
     def forward(self, t, a): return self.mlp(torch.cat([self.conv(t).view(t.size(0), -1), a], dim=1))
 
 class RiichiCNN(nn.Module): # フェーズ6 (リーチ)
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64 + 9, 64), nn.ReLU(), nn.Linear(64, 1)) # aux_dim=9想定
     def forward(self, t, a): return self.mlp(torch.cat([self.conv(t).view(t.size(0), -1), a], dim=1))
 
 class OshibikiCNN(nn.Module): # フェーズ7E (押し引き)
     def __init__(self):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv1d(25, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
+        self.conv = nn.Sequential(nn.Conv1d(33, 64, 3, padding=1), nn.ReLU(), nn.AdaptiveAvgPool1d(1))
         self.mlp = nn.Sequential(nn.Linear(64 + 23, 64), nn.ReLU(), nn.Linear(64, 1)) # E3仕様 aux_dim=23想定
     def forward(self, t, a): return self.mlp(torch.cat([self.conv(t).view(t.size(0), -1), a], dim=1))
 
@@ -65,7 +65,7 @@ class IntegratedAIRouter:
 
     def _extract_tensors(self, ctx):
         """ 状態からテンソルとダミーの補助特徴量を生成 (Shapeエラーを防ぐ) """
-        t = torch.zeros((1, 25, 34), dtype=torch.float32).to(device)
+        t = torch.zeros((1, 33, 34), dtype=torch.float32).to(device)
         return t, torch.zeros((1, 10)).to(device), torch.zeros((1, 9)).to(device), torch.zeros((1, 23)).to(device)
 
     def decide_action(self, ctx):
