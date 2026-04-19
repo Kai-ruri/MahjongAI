@@ -1307,3 +1307,46 @@ class MahjongStateV5:
         target_channel[0][discarded_tile] = 1.0
 
         return np.concatenate((base_tensor, target_channel), axis=0)  # shape: (34, 34)
+
+    def to_tensor_for_naki_v3(self, discarded_tile,
+                               shanten_before, shanten_after,
+                               is_tenpai_after, ukeire_after):
+        """
+        鳴き判断専用テンソル（強化版）: CH23-26 にシャンテン/有効牌情報を上書き
+
+        入力チャンネル構成 (34ch = 33ch基底 + 1ch捨て牌):
+          CH00-22: 従来の33ch基底 (skip_logic=True と同一)
+          CH23: 鳴く前のシャンテン数   = (shanten+1) / 8.0  [0..1]  ← 上書き
+          CH24: 鳴き後ベストシャンテン = (shanten+1) / 8.0  [0..1]  ← 上書き
+          CH25: 鳴いたらテンパイか     = 0.0 or 1.0 (全ch一律) ← 上書き
+          CH26: 鳴き後有効牌種類数     = ukeire / 34.0       [0..1]  ← 上書き
+          CH27-32: 従来通り (赤ドラフラグ等)
+          CH33: 捨て牌位置 (1-hot)
+
+        引数:
+          discarded_tile  : 捨て牌インデックス (0-33)
+          shanten_before  : 鳴く前のシャンテン数 (-1=テンパイ, 0=1シャンテン, ...)
+          shanten_after   : 鳴き後ベストシャンテン (最良打牌時)
+          is_tenpai_after : 鳴き後にテンパイを取れるか (bool)
+          ukeire_after    : 鳴き後の有効牌種類数 (int)
+        """
+        base = self.to_tensor(skip_logic=True)  # (33, 34)  CH23-26 はゼロ
+
+        # CH23: 鳴く前シャンテン (0シャンテン=テンパイで小さい値になる)
+        # shanten=-1(テンパイ)→0/8=0.0, shanten=0(1シャンテン)→1/8, ..., 7+→1.0
+        base[23, :] = float(min(max(shanten_before + 1, 0), 8)) / 8.0
+
+        # CH24: 鳴き後シャンテン
+        base[24, :] = float(min(max(shanten_after + 1, 0), 8)) / 8.0
+
+        # CH25: テンパイ取得フラグ (全タイル位置に同一値を置く)
+        base[25, :] = 1.0 if is_tenpai_after else 0.0
+
+        # CH26: 鳴き後有効牌種類数 (0〜34種)
+        base[26, :] = float(min(max(ukeire_after, 0), 34)) / 34.0
+
+        # CH33: 捨て牌位置 (1-hot)
+        ch33 = np.zeros((1, 34), dtype=np.float32)
+        ch33[0][discarded_tile] = 1.0
+
+        return np.concatenate((base, ch33), axis=0)  # shape: (34, 34)
