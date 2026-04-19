@@ -2089,9 +2089,13 @@ def generate_chi_patterns(state, discard_tile):
     return patterns
 
 
-def decide_naki_action(state, ai_model, discard_tile, who_discarded):
+def decide_naki_action(state, ai_model, discard_tile, who_discarded,
+                       naki_prob=0.0, game_ctx=None):
     """
     鳴き（ポン/チー）を行うかスキップするかを判定し、最良の行動を返す。
+
+    naki_prob : hybrid_naki_decision_v5 が出力した「鳴く」確率（0.0〜1.0）
+    game_ctx  : compute_game_situation が返す戦況コンテキスト dict
 
     返り値: {"best": {"action": "skip"}} または
             {"best": {"action": "naki", "naki_type": "pon"|"chi",
@@ -2173,6 +2177,22 @@ def decide_naki_action(state, ai_model, discard_tile, who_discarded):
 
     after_shanten_post = calculate_shanten_unified(post_discard_state, post_discard_h)
 
+    # 速度優先フラグ: 以下の局面では安手でも積極的に仕掛ける
+    #   - 自家が親: 連荘が最優先
+    #   - オーラスのトップ目: 局消化が目的
+    #   - 他家が親: 相手の連荘を止めるため早和了を狙う
+    speed_priority = False
+    if game_ctx is not None:
+        is_dealer   = game_ctx.get('is_dealer', False)
+        is_orasu    = game_ctx.get('is_orasu', False)
+        rank        = game_ctx.get('rank', 2)
+        opp_is_dealer = getattr(state, 'dealer_pid', 0) != 0  # 他家が親
+        speed_priority = (
+            is_dealer                         # 自家の親番: 連荘優先
+            or (is_orasu and rank == 0)       # オーラストップ: 局消化
+            or opp_is_dealer                  # 他家の親番を流す
+        )
+
     # 役の見通しチェック:
     # ① improvement==0 かつ テンパイ前（従来通り）
     # ② improvement>0 かつ 副露後もテンパイでない（新規: 役なし改善を排除）
@@ -2188,39 +2208,38 @@ def decide_naki_action(state, ai_model, discard_tile, who_discarded):
             or _check_one_suit(post_discard_h, after_melds)                              # ④ ホンイツ/清一色方向（打牌後で判定）
         )
         if not allowed:
-            # 役の見通しが①〜④のいずれもない場合は常にスキップ
-            # （有効牌フォールバックは役なし端牌ポンを許してしまうため削除）
             return {"best": {"action": "skip"}}
 
-    # 【Change 1】副露後打牌の安全性チェック（リーチ者がいる場合のみ）
-    # 役牌ポンは役確定のため、リーチ対策でも基本的にスキップしない
+    # 副露後打牌の安全性チェック（リーチ者がいる場合のみ）
+    # 役牌ポンは役確定のため除外。テンパイ取れる場合はリスク許容度を引き上げ（1.5→2.0）
     is_yakuhai_pon_c1 = _check_yakuhai_pon(state, discard_tile, naki_type)
     if not is_yakuhai_pon_c1:
         if any(state.riichi_declared.get(p, False) for p in [1, 2, 3]):
             if best_discard_after >= 0:
                 risk = calculate_simple_discard_risk(state, best_discard_after)
-                if risk > 1.5:
+                risk_threshold = 2.0 if after_shanten_post == 0 else 1.5
+                if risk > risk_threshold:
                     return {"best": {"action": "skip"}}
 
-    # 【Change 3】点数フィルタ: 副露後テンパイで最大ロン点数が低すぎなら見送り
+    # 点数フィルタ: 副露後テンパイで役なし（=0点）のみブロック
+    # 閾値を 2000 → 1000 に緩和（1000点仕掛けの解禁）
     # 役牌ポンは対象外（役確定のため点数が低くても鳴く価値あり）
     is_yakuhai_pon = _check_yakuhai_pon(state, discard_tile, naki_type)
     if not is_yakuhai_pon:
         if after_shanten_post == 0:
-            # 打牌後手牌でスコア推定（より正確）
             max_score = _estimate_max_tenpai_score(post_discard_state, post_discard_h)
-            # 点数フィルタ: 役なし鳴きを排除（閾値緩和: 3000→2000）
-            if max_score < 2000:
+            if max_score < 1000:
                 return {"best": {"action": "skip"}}
-            # 【Change 4】メンゼン1シャンテン保護: 門前から鳴いてテンパイする局面
-            # リーチ宣言権とイーペー・裏ドラ期待値を失うコストが大きいため、
-            # 役・打点が確保できない場合はメンゼン維持を優先する
+            # メンゼン1シャンテン保護: リーチ権・裏ドラを失うコストを考慮
+            # ただし「NN確信大(>0.75)」または「速度優先局面」はバイパスして仕掛ける
             if (current_shanten == 1
                     and len(getattr(state, 'fixed_mentsu', [])) == 0):
-                has_dora = _check_dora_pon(state, discard_tile, naki_type)
-                has_tanyao = _check_tanyao_possible(post_discard_h, after_melds)
+                has_dora     = _check_dora_pon(state, discard_tile, naki_type)
+                has_tanyao   = _check_tanyao_possible(post_discard_h, after_melds)
                 has_one_suit = _check_one_suit(post_discard_h, after_melds)
-                if not (has_dora or has_tanyao or has_one_suit) and max_score < 3000:
-                    return {"best": {"action": "skip"}}
+                bypass = naki_prob > 0.75 or speed_priority
+                if not bypass:
+                    if not (has_dora or has_tanyao or has_one_suit) and max_score < 3000:
+                        return {"best": {"action": "skip"}}
 
     return {"best": best_result}

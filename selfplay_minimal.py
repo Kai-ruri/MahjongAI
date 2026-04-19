@@ -643,17 +643,32 @@ def find_naki_action(gs, discarder_pid, discard_tile, naki_model, ai_model):
         local_state = build_local_state_for_player(gs, pid)
         relative_who = (discarder_pid - pid + 4) % 4
 
+        # 戦況コンテキスト（速度優先判定・NN閾値調整に使用）
+        game_ctx = hybrid_inference.compute_game_situation(local_state)
+        _is_dealer  = game_ctx.get('is_dealer', False)
+        _is_orasu   = game_ctx.get('is_orasu', False)
+        _rank       = game_ctx.get('rank', 2)
+        _opp_dealer = getattr(local_state, 'dealer_pid', 0) != 0
+        speed_priority_nn = _is_dealer or (_is_orasu and _rank == 0) or _opp_dealer
+
         # MLモデルによる一次フィルタ（利用可能な場合）
+        # speed_priority 局面では閾値を緩和（0.40→0.25）、その他は 0.35 に緩和
+        naki_prob = 0.0
         if naki_model is not None:
-            should_naki, _ = hybrid_inference.hybrid_naki_decision_v5(
+            should_naki, naki_prob = hybrid_inference.hybrid_naki_decision_v5(
                 local_state, discard_tile, relative_who, naki_model
             )
             if not should_naki:
-                continue
+                if naki_prob == 0.0:
+                    continue  # 絶対ブロック（リーチ中 or 鳴き不可）
+                naki_threshold = 0.25 if speed_priority_nn else 0.35
+                if naki_prob <= naki_threshold:
+                    continue
 
         # 打牌AIで鳴き後の局面を評価してスキップより有利か確認
         result = hybrid_inference.decide_naki_action(
-            local_state, ai_model, discard_tile, relative_who
+            local_state, ai_model, discard_tile, relative_who,
+            naki_prob=naki_prob, game_ctx=game_ctx,
         )
         best = result.get("best") if result else None
         if best and best["action"] != "skip" and best.get("consumed_tiles"):
@@ -667,17 +682,30 @@ def find_naki_action(gs, discarder_pid, discard_tile, naki_model, ai_model):
             chi_patterns = hybrid_inference.generate_chi_patterns(local_state, discard_tile)
 
             if chi_patterns:
+                game_ctx = hybrid_inference.compute_game_situation(local_state)
+                _is_dealer  = game_ctx.get('is_dealer', False)
+                _is_orasu   = game_ctx.get('is_orasu', False)
+                _rank       = game_ctx.get('rank', 2)
+                _opp_dealer = getattr(local_state, 'dealer_pid', 0) != 0
+                speed_priority_nn = _is_dealer or (_is_orasu and _rank == 0) or _opp_dealer
+
                 # MLモデルによる一次フィルタ（利用可能な場合）
+                naki_prob = 0.0
                 if naki_model is not None:
-                    should_naki, _ = hybrid_inference.hybrid_naki_decision_v5(
+                    should_naki, naki_prob = hybrid_inference.hybrid_naki_decision_v5(
                         local_state, discard_tile, 3, naki_model
                     )
                     if not should_naki:
-                        return None
+                        if naki_prob == 0.0:
+                            return None  # 絶対ブロック
+                        naki_threshold = 0.25 if speed_priority_nn else 0.35
+                        if naki_prob <= naki_threshold:
+                            return None
 
                 # 打牌AIでチー後の局面を評価
                 result = hybrid_inference.decide_naki_action(
-                    local_state, ai_model, discard_tile, 3
+                    local_state, ai_model, discard_tile, 3,
+                    naki_prob=naki_prob, game_ctx=game_ctx,
                 )
                 best = result.get("best") if result else None
                 if best and best["action"] != "skip" and best.get("consumed_tiles"):
